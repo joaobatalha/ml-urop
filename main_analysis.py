@@ -15,6 +15,7 @@ FG_MADE_EVENT_ID = 3
 POSSESSION_EVENT_ID = 23
 PASS_EVENT_ID = 22
 
+
 def fetch_positions(cursor, gamecode, quarter, possession, start):
     #basketball_db = connect_to_basketballdb()
     #cursor = basketball_db.cursor(mysql.cursors.DictCursor)
@@ -144,7 +145,7 @@ def fetch_ball_positions(cursor, gamecode, quarter, start, finish):
                 quarter = %s AND 
                 (gameclock BETWEEN %s AND %s) AND
                 player_id = -1
-                ORDER BY gameclock DESC""" % (gamecode, quarter, finish, start)
+                ORDER BY gameclock DESC""" % ( gamecode, quarter, finish, start )
                  
     cursor.execute(query)
     ball_positions = cursor.fetchall()
@@ -184,6 +185,34 @@ def any_f_or_t_before_cross(cursor, possession):
         if shc == bhc:
             return True
     return False
+
+def get_ball_cross_time(cursor, possession, start):
+    gamecode = possession['gamecode']
+    quarter  = possession['quarter']
+    ball_positions = fetch_positions(cursor, gamecode, quarter, possession, start)
+    if len(ball_positions) == 0:
+        raise Exception("We are missing some position data! \n")
+
+    #check if a timeout or a foul occurred in possession
+    #This is indicated by stopping the gameclock
+    #pos_times = [ball_pos['gameclock'] for ball_pos in ball_positions]
+    #if len(pos_times) != len(set(pos_times)):
+        #Detected a foul or a timeout, so skip possession
+        #continue
+
+    s = cmp(HALFCOURT_X - ball_positions[0]['X'], 0)
+    for ball_pos in ball_positions:
+        new_s = cmp(HALFCOURT_X - ball_pos['X'], 0)
+        if new_s != s:
+            time_to_cross  = start - ball_pos['gameclock']
+            if time_to_cross >= 7.5 or time_to_cross <= 1.5:
+                break
+
+            #print "FG possession start: %s\n" % (possession['time_start'].seconds/60.0)
+            #print "FG possession end: %s\n" % (possession['time_end'].seconds/60.0)
+            #print "afg_possession start: %s\n" % (afg_possession['time_start'].seconds/60.0)
+            #print "time_to_cross: %s\n" % (time_to_cross)
+            return (round(time_to_cross,2), int(possession['points']))
 
 
 
@@ -227,39 +256,18 @@ def generate_data(gamecode, cursor):
                     except Exception, e:
                         #Using time from Possession table, which is less accurate
                         start = possession_start
-                    ball_positions = fetch_positions(cursor, gamecode, quarter, afg_possession, start)
-                    if len(ball_positions) == 0:
-                        print "We are missing some position data! \n" 
-                        #pdb.set_trace()
-                        continue
-
-                    #check if a timeout or a foul occurred in possession
-                    #This is indicated by stopping the gameclock
-                    #pos_times = [ball_pos['gameclock'] for ball_pos in ball_positions]
-                    #if len(pos_times) != len(set(pos_times)):
-                        #Detected a foul or a timeout, so skip possession
-                        #continue
 
                     #checking for fouls or turnovers before crossing halfcourt
                     f_or_t_before_cross = any_f_or_t_before_cross(cursor, afg_possession)
                     if f_or_t_before_cross:
                         continue
 
-                    
-                    s = cmp(HALFCOURT_X - ball_positions[0]['X'], 0)
-                    for ball_pos in ball_positions:
-                        new_s = cmp(HALFCOURT_X - ball_pos['X'], 0)
-                        if new_s != s:
-                            time_to_cross  = start - ball_pos['gameclock']
-                            if time_to_cross >= 7.5 or time_to_cross <= 1.5:
-                                break
-
-                            #print "FG possession start: %s\n" % (possession['time_start'].seconds/60.0)
-                            #print "FG possession end: %s\n" % (possession['time_end'].seconds/60.0)
-                            #print "afg_possession start: %s\n" % (afg_possession['time_start'].seconds/60.0)
-                            #print "time_to_cross: %s\n" % (time_to_cross)
-                            results.append((round(time_to_cross,2), int(afg_possession['points'])))
-                            break
+                    try:
+                        (t2c, pts) = get_ball_cross_time(cursor, afg_possession, start)
+                    except Exception:
+                        #print e.args
+                        continue
+                    results.append((t2c, pts))
         team_name = get_team_name(team_1, cursor)[0]
         fout = get_csv(team_name)
         for (time, points) in results:
